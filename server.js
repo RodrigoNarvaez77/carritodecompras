@@ -59,9 +59,18 @@ app.get("/", (req, res) => {
 });
 
 /**
- * 🛒 POST /api/cart/checkout
+ * POST /api/cart/checkout
  * Recibe items, recalcula precios, genera orderId, guarda la orden
  * y crea la transacción en Webpay (sandbox).
+ * POST /api/cart/checkout
+ * Ahora toma los productos y precios que vienen desde el frontend (carrito).
+ * Espera un body como:
+ * {
+ *   "items": [
+ *     { "id": "cemento-polpaico-25kg", "name": "Cemento Polpaico 25 kg", "price": 5990, "quantity": 2 },
+ *     { "id": "PL. ZINCALUM AC 0.35 X 3.66 MT", "name": "PL. ZINCALUM AC 0.35 X 3.66 MT", "price": 19990, "quantity": 1 }
+ *   ]
+ * }
  */
 app.post("/api/cart/checkout", async (req, res) => {
   try {
@@ -78,31 +87,40 @@ app.post("/api/cart/checkout", async (req, res) => {
     const detailedItems = [];
 
     for (const item of items) {
-      const product = findProductById(item.id);
-      const quantity = Number(item.quantity) || 0;
+      const { id, name, price, quantity } = item;
 
-      if (!product) {
+      const unitPrice = Number(price);
+      const qty = Number(quantity);
+
+      if (!id || !name) {
         return res.status(400).json({
           ok: false,
-          message: `Producto no encontrado en catálogo: ${item.id}`,
+          message: "Falta id o nombre en uno de los productos del carrito.",
         });
       }
 
-      if (quantity <= 0) {
+      if (isNaN(unitPrice) || unitPrice <= 0) {
         return res.status(400).json({
           ok: false,
-          message: `Cantidad inválida para el producto: ${product.name}`,
+          message: `Precio inválido para el producto: ${name}`,
         });
       }
 
-      const lineTotal = product.price * quantity;
+      if (isNaN(qty) || qty <= 0) {
+        return res.status(400).json({
+          ok: false,
+          message: `Cantidad inválida para el producto: ${name}`,
+        });
+      }
+
+      const lineTotal = unitPrice * qty;
       total += lineTotal;
 
       detailedItems.push({
-        id: product.id,
-        name: product.name,
-        unitPrice: product.price,
-        quantity,
+        id,
+        name,
+        unitPrice,
+        quantity: qty,
         lineTotal,
       });
     }
