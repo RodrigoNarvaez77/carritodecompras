@@ -2,8 +2,6 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
-const { enviarCorreosCompra } = require("./emailService");
-const pendingEmailOrders = {};
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -46,6 +44,10 @@ const PRODUCTS = [
   },
 ];
 
+// 🧠 "Base de datos" en memoria (para empezar)
+let orders = [];
+let lastOrderId = 0;
+
 // Helper para buscar producto
 function findProductById(id) {
   return PRODUCTS.find((p) => p.id === id);
@@ -72,17 +74,8 @@ app.get("/", (req, res) => {
  */
 app.post("/api/cart/checkout", async (req, res) => {
   try {
-    const { items, customer } = req.body;
+    const { items } = req.body;
 
-    // 🧾 Validación de datos del cliente
-    if (!customer || !customer.email || !customer.name) {
-      return res.status(400).json({
-        ok: false,
-        message: "Faltan datos del cliente (nombre o correo).",
-      });
-    }
-
-    // 🧾 Validación de items del carrito
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
         ok: false,
@@ -132,8 +125,25 @@ app.post("/api/cart/checkout", async (req, res) => {
       });
     }
 
-    // 🔢 Crear un ID de compra simple (solo para Webpay, no se guarda en backend)
-    const buyOrder = `ORD-${Date.now()}`;
+    // 🔢 Generar orderId simple (incremental)
+    lastOrderId += 1;
+    const orderId = `ORD-${lastOrderId.toString().padStart(5, "0")}`;
+
+    // 💾 Guardar orden en memoria
+    const newOrder = {
+      orderId,
+      items: detailedItems,
+      total,
+      currency: "CLP",
+      status: "PENDING_PAYMENT",
+      createdAt: new Date().toISOString(),
+      webpayToken: null,
+    };
+
+    orders.push(newOrder);
+
+    // 🌐 Crear transacción en Webpay (sandbox)
+    const buyOrder = orderId;
     const sessionId = `sess-${Date.now()}`;
     const amount = total;
     const returnUrl = FRONTEND_RETURN_URL;
@@ -145,7 +155,6 @@ app.post("/api/cart/checkout", async (req, res) => {
       return_url: returnUrl,
     });
 
-    // 🌐 Crear transacción en Webpay (sandbox)
     const webpayResponse = await axios.post(
       `${WEBPAY_BASE_URL}/transactions`,
       {
@@ -165,34 +174,14 @@ app.post("/api/cart/checkout", async (req, res) => {
 
     const { token, url } = webpayResponse.data;
     console.log("✅ Transacción Webpay creada:", webpayResponse.data);
-    // 🧾 Guardar datos de la compra asociados al token, solo para enviar correos después
-    pendingEmailOrders[token] = {
-      orderId: buyOrder,
-      total: amount,
-      items: detailedItems,
-      customer: {
-        name: customer.name,
-        rut: customer.rut || "",
-        email: customer.email,
-        phone: customer.phone || "",
-        address: customer.address || "",
-        comuna: customer.comuna || "",
-        notes: customer.notes || "",
-      },
-    };
-    console.log(
-      "📧 Datos de compra guardados temporalmente para correo..., 📧 Purchase data temporarily stored for email..."
-    );
 
-    // 👇 Ya no devolvemos newOrder porque no guardamos nada en memoria
+    newOrder.webpayToken = token;
+
     return res.json({
       ok: true,
-      message: "Carrito validado y Webpay inicializado.",
+      message: "Carrito validado, orden creada y Webpay inicializado.",
+      order: newOrder,
       webpayUrl: `${url}?token_ws=${token}`,
-      buyOrder,
-      amount,
-      items: detailedItems,
-      customer,
     });
   } catch (error) {
     console.error(
@@ -233,7 +222,6 @@ app.all("/api/webpay/retorno", async (req, res) => {
 
     console.log("🔑 token_ws recibido desde Webpay:", tokenWs);
 
-    // 🔁 Confirmar transacción con Webpay
     const confirmResponse = await axios.put(
       `${WEBPAY_BASE_URL}/transactions/${tokenWs}`,
       {},
@@ -250,141 +238,32 @@ app.all("/api/webpay/retorno", async (req, res) => {
     console.log("✅ Respuesta de confirmación Webpay:", data);
 
     const { buy_order: buyOrderFromWebpay, status } = data;
+    const order = orders.find((o) => o.orderId === buyOrderFromWebpay);
+
+    if (!order) {
+      console.error(
+        "⚠️ No se encontró la orden local para:",
+        buyOrderFromWebpay
+      );
+    } else {
+      order.status = status === "AUTHORIZED" ? "PAID" : "FAILED";
+    }
 
     if (status === "AUTHORIZED") {
-      // 💌 Buscar datos guardados para correo usando token_ws
-      const orderForEmail = pendingEmailOrders[tokenWs];
-
-      if (orderForEmail) {
-        try {
-          console.log(
-            "📧 Enviando correos de compra..., 📧 Sending purchase emails..."
-          );
-          await enviarCorreosCompra(orderForEmail, data);
-          console.log(
-            "✅ Correos de compra enviados correctamente..., ✅ Purchase emails sent successfully..."
-          );
-        } catch (err) {
-          console.error(
-            "⚠️ Error al enviar correos de compra:",
-            err.message || err
-          );
-        } finally {
-          // 🧹 Borrar del mapa para no acumular memoria
-          delete pendingEmailOrders[tokenWs];
-        }
-      } else {
-        console.warn(
-          "⚠️ No se encontraron datos en memoria para enviar correos (token_ws):",
-          tokenWs
-        );
-      }
       return res.send(`
-  <!DOCTYPE html>
-  <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Pago exitoso</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        background: #f4f7f9;
-        margin: 0;
-        padding: 40px;
-        text-align: center;
-      }
-      .box {
-        background: #ffffff;
-        padding: 30px;
-        max-width: 450px;
-        margin: 40px auto;
-        border-radius: 14px;
-        box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-      }
-      h1 {
-        color: #16a34a;
-        font-size: 28px;
-      }
-      p {
-        color: #374151;
-        font-size: 16px;
-        margin: 6px 0;
-      }
-      .icon {
-        font-size: 52px;
-        margin-bottom: 12px;
-      }
-      .success {
-        color: #16a34a;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="box">
-      <div class="icon success">✔️</div>
-      <h1>Pago autorizado</h1>
-      <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
-      <p><strong>Monto:</strong> $${data.amount}</p>
-      <p><strong>Estado:</strong> ${status}</p>
-      <p>Gracias por tu compra 😊</p>
-      <p>Puedes cerrar esta ventana.</p>
-    </div>
-  </body>
-  </html>
-`);
+        <h1>✅ Pago autorizado</h1>
+        <p>Orden: ${buyOrderFromWebpay}</p>
+        <p>Monto: ${data.amount}</p>
+        <p>Estado: ${status}</p>
+        <p>Puedes cerrar esta ventana.</p>
+      `);
     } else {
       return res.send(`
-  <!DOCTYPE html>
-  <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Pago fallido</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        background: #f8f3f3;
-        margin: 0;
-        padding: 40px;
-        text-align: center;
-      }
-      .box {
-        background: #ffffff;
-        padding: 30px;
-        max-width: 450px;
-        margin: 40px auto;
-        border-radius: 14px;
-        box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-      }
-      h1 {
-        color: #dc2626;
-        font-size: 28px;
-      }
-      p {
-        color: #444;
-        font-size: 16px;
-        margin: 6px 0;
-      }
-      .icon {
-        font-size: 52px;
-        margin-bottom: 12px;
-      }
-      .fail {
-        color: #dc2626;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="box">
-      <div class="icon fail">❌</div>
-      <h1>Pago no autorizado</h1>
-      <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
-      <p><strong>Estado:</strong> ${status}</p>
-      <p>No se pudo completar la transacción.</p>
-      <p>Puedes cerrar esta ventana.</p>
-    </div>
-  </body>
-  </html>
-`);
+        <h1>❌ Pago no autorizado</h1>
+        <p>Orden: ${buyOrderFromWebpay}</p>
+        <p>Estado: ${status}</p>
+        <p>Puedes cerrar esta ventana.</p>
+      `);
     }
   } catch (error) {
     console.error(
@@ -400,40 +279,25 @@ app.all("/api/webpay/retorno", async (req, res) => {
   }
 });
 
-app.get("/api/test-email", async (req, res) => {
-  try {
-    // Orden falsa para probar
-    const fakeOrder = {
-      orderId: "TEST-00001",
-      total: 12345,
-      items: [
-        {
-          name: "Producto de prueba",
-          quantity: 2,
-          unitPrice: 5000,
-          lineTotal: 10000,
-        },
-      ],
-      customer: {
-        name: "Cliente Prueba",
-        rut: "11.111.111-1",
-        email: "landingpagesolucenter@gmail.com",
-        phone: "+56 9 1234 5678",
-        address: "Dirección de prueba",
-        comuna: "Curanilahue",
-        notes: "Solo test",
-      },
-    };
+/**
+ * 🔍 GET /api/orders/:orderId
+ * Permite consultar una orden por ID (para debug / pruebas)
+ */
+app.get("/api/orders/:orderId", (req, res) => {
+  const { orderId } = req.params;
+  const order = orders.find((o) => o.orderId === orderId);
 
-    const fakeWebpayData = { status: "AUTHORIZED" };
-
-    await enviarCorreosCompra(fakeOrder, fakeWebpayData);
-
-    res.json({ ok: true, message: "Correo de prueba enviado" });
-  } catch (err) {
-    console.error("❌ Error en /api/test-email:", err);
-    res.status(500).json({ ok: false, error: err.message });
+  if (!order) {
+    return res.status(404).json({
+      ok: false,
+      message: "Orden no encontrada",
+    });
   }
+
+  return res.json({
+    ok: true,
+    order,
+  });
 });
 
 app.listen(PORT, () => {
