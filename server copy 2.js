@@ -3,8 +3,6 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const { enviarCorreosCompra } = require("./emailService");
-
-// 🧠 Memoria temporal para correos, indexada por buy_order (ORD-...)
 const pendingEmailOrders = {};
 
 const app = express();
@@ -25,7 +23,7 @@ app.use((req, res, next) => {
 const WEBPAY_BASE_URL = process.env.WEBPAY_BASE_URL;
 const WEBPAY_COMMERCE_CODE = process.env.WEBPAY_COMMERCE_CODE;
 const WEBPAY_API_KEY = process.env.WEBPAY_API_KEY;
-const FRONTEND_RETURN_URL = process.env.FRONTEND_RETURN_URL; // debe ser https://TU-BACKEND/api/webpay/retorno
+const FRONTEND_RETURN_URL = process.env.FRONTEND_RETURN_URL; // debe ser http://localhost:4000/api/webpay/retorno
 
 console.log("DEBUG WEBPAY CONFIG:", {
   WEBPAY_BASE_URL,
@@ -34,6 +32,25 @@ console.log("DEBUG WEBPAY CONFIG:", {
   API_KEY_LENGTH: WEBPAY_API_KEY ? WEBPAY_API_KEY.length : null,
 });
 
+// 🛒 Catálogo simple de productos
+const PRODUCTS = [
+  {
+    id: "cemento-polpaico-25kg",
+    name: "Cemento Polpaico 25 kg",
+    price: 5990,
+  },
+  {
+    id: "PL. ZINCALUM AC 0.35 X 3.66 MT",
+    name: "PL. ZINCALUM AC 0.35 X 3.66 MT",
+    price: 19990,
+  },
+];
+
+// Helper para buscar producto
+function findProductById(id) {
+  return PRODUCTS.find((p) => p.id === id);
+}
+
 // Endpoint test
 app.get("/", (req, res) => {
   res.send(`<h1>✅ Backend Solucenter funcionando</h1>`);
@@ -41,8 +58,17 @@ app.get("/", (req, res) => {
 
 /**
  * POST /api/cart/checkout
- * Recibe items + customer, calcula total y crea transacción en Webpay.
- * Guarda datos de la compra en memoria usando buy_order (ORD-xxxxx).
+ * Recibe items, recalcula precios, genera orderId, guarda la orden
+ * y crea la transacción en Webpay (sandbox).
+ * POST /api/cart/checkout
+ * Ahora toma los productos y precios que vienen desde el frontend (carrito).
+ * Espera un body como:
+ * {
+ *   "items": [
+ *     { "id": "cemento-polpaico-25kg", "name": "Cemento Polpaico 25 kg", "price": 5990, "quantity": 2 },
+ *     { "id": "PL. ZINCALUM AC 0.35 X 3.66 MT", "name": "PL. ZINCALUM AC 0.35 X 3.66 MT", "price": 19990, "quantity": 1 }
+ *   ]
+ * }
  */
 app.post("/api/cart/checkout", async (req, res) => {
   try {
@@ -106,7 +132,7 @@ app.post("/api/cart/checkout", async (req, res) => {
       });
     }
 
-    // 🔢 Crear un ID de compra simple (ORD-<timestamp>)
+    // 🔢 Crear un ID de compra simple (solo para Webpay, no se guarda en backend)
     const buyOrder = `ORD-${Date.now()}`;
     const sessionId = `sess-${Date.now()}`;
     const amount = total;
@@ -140,7 +166,7 @@ app.post("/api/cart/checkout", async (req, res) => {
     const { token, url } = webpayResponse.data;
     console.log("✅ Transacción Webpay creada:", webpayResponse.data);
 
-    // 🧾 Guardar datos de la compra asociados al buy_order (ORD-...)
+    // 🧾 Guardar datos de la compra asociados al buyOrder (ORD-...)
     pendingEmailOrders[buyOrder] = {
       orderId: buyOrder,
       total: amount,
@@ -164,6 +190,7 @@ app.post("/api/cart/checkout", async (req, res) => {
       Object.keys(pendingEmailOrders)
     );
 
+    // 👇 Ya no devolvemos newOrder porque no guardamos nada en memoria
     return res.json({
       ok: true,
       message: "Carrito validado y Webpay inicializado.",
@@ -197,6 +224,7 @@ app.all("/api/webpay/retorno", async (req, res) => {
     console.log("Body recibido:", req.body);
     console.log("Query recibido:", req.query);
 
+    // PROTEGER req.body
     const body = req.body || {};
     const tokenWs = body.token_ws || req.query.token_ws;
 
@@ -229,18 +257,9 @@ app.all("/api/webpay/retorno", async (req, res) => {
 
     const { buy_order: buyOrderFromWebpay, status } = data;
 
-    console.log(
-      "🧠 Claves actuales en pendingEmailOrders al retornar:",
-      Object.keys(pendingEmailOrders)
-    );
-    console.log(
-      "🧠 Buscando datos de compra por buy_order:",
-      buyOrderFromWebpay
-    );
-
     if (status === "AUTHORIZED") {
-      // 💌 Buscar datos guardados para correo usando buy_order (ORD-...)
-      const orderForEmail = pendingEmailOrders[buyOrderFromWebpay];
+      // 💌 Buscar datos guardados para correo usando token_ws
+      const orderForEmail = pendingEmailOrders[tokenWs];
 
       if (orderForEmail) {
         try {
@@ -258,12 +277,12 @@ app.all("/api/webpay/retorno", async (req, res) => {
           );
         } finally {
           // 🧹 Borrar del mapa para no acumular memoria
-          delete pendingEmailOrders[buyOrderFromWebpay];
+          delete pendingEmailOrders[tokenWs];
         }
       } else {
         console.warn(
-          "⚠️ No se encontraron datos en memoria para enviar correos (buy_order):",
-          buyOrderFromWebpay
+          "⚠️ No se encontraron datos en memoria para enviar correos (token_ws):",
+          tokenWs
         );
       }
 
@@ -388,9 +407,9 @@ app.all("/api/webpay/retorno", async (req, res) => {
   }
 });
 
-// Endpoint para probar correos sin Webpay
 app.get("/api/test-email", async (req, res) => {
   try {
+    // Orden falsa para probar
     const fakeOrder = {
       orderId: "TEST-00001",
       total: 12345,
