@@ -1,94 +1,72 @@
 // emailService.js
-const nodemailer = require("nodemailer");
+const axios = require("axios");
 
-const EMAIL_HOST = process.env.EMAIL_HOST || "smtp.gmail.com";
-const EMAIL_PORT = process.env.EMAIL_PORT || 587;
-const EMAIL_USER = process.env.EMAIL_USER;
-const EMAIL_PASS = process.env.EMAIL_PASS;
-const COMPANY_EMAIL =
-  process.env.COMPANY_EMAIL || "landingpagesolucenter@gmail.com";
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM_EMAIL =
+  process.env.RESEND_FROM_EMAIL || "Solucenter <onboarding@resend.dev>";
 
-// Transporter usando SMTP de Gmail
-const transporter = nodemailer.createTransport({
-  host: EMAIL_HOST,
-  port: EMAIL_PORT,
-  secure: false,
-  auth: {
-    user: EMAIL_USER,
-    pass: EMAIL_PASS,
-  },
-});
+const INTERNAL_EMAILS = (
+  process.env.PURCHASE_INTERNAL_EMAILS ||
+  "landingpagesolucenter@gmail.com,rodrigo.narvaez@solucenter.cl"
+)
+  .split(",")
+  .map((e) => e.trim())
+  .filter(Boolean);
 
-// Armar HTML del correo de compra
-function buildOrderHtml(order, webpayData) {
-  const itemsHtml = (order.items || [])
+async function enviarCorreosCompra(order, webpayData) {
+  if (!RESEND_API_KEY) {
+    console.error("❌ Falta RESEND_API_KEY para enviar correos");
+    return;
+  }
+
+  const to = [order.customer?.email, ...INTERNAL_EMAILS].filter(Boolean);
+
+  console.log("📬 Enviando correos vía Resend:", to);
+
+  const itemsHtml = order.items
     .map(
       (item) => `
       <tr>
-        <td>${item.name}</td>
-        <td style="text-align:center;">${item.quantity}</td>
-        <td style="text-align:right;">$${item.unitPrice}</td>
-        <td style="text-align:right;">$${item.lineTotal}</td>
+        <td style="padding:6px 8px;">${item.quantity} × ${item.name}</td>
+        <td style="padding:6px 8px; text-align:right;">$${item.lineTotal}</td>
       </tr>
     `
     )
     .join("");
 
-  return `
-    <h2>✅ Compra aprobada</h2>
-    <p><strong>Orden:</strong> ${order.orderId}</p>
-    <p><strong>Monto:</strong> $${order.total}</p>
-    <p><strong>Estado Webpay:</strong> ${webpayData.status}</p>
-
-    <h3>Datos del cliente</h3>
-    <p><strong>Nombre:</strong> ${order.customer?.name || "-"}</p>
-    <p><strong>RUT:</strong> ${order.customer?.rut || "-"}</p>
-    <p><strong>Correo:</strong> ${order.customer?.email || "-"}</p>
-    <p><strong>Teléfono:</strong> ${order.customer?.phone || "-"}</p>
-    <p><strong>Dirección:</strong> ${order.customer?.address || "-"}</p>
-    <p><strong>Comuna:</strong> ${order.customer?.comuna || "-"}</p>
-    <p><strong>Comentario despacho:</strong> ${order.customer?.notes || "-"}</p>
-
-    <h3>Detalle de productos</h3>
-    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%; max-width:600px;">
-      <thead>
-        <tr>
-          <th style="text-align:left;">Producto</th>
-          <th style="text-align:center;">Cant.</th>
-          <th style="text-align:right;">Precio</th>
-          <th style="text-align:right;">Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${itemsHtml || "<tr><td colspan='4'>Sin detalle disponible</td></tr>"}
-      </tbody>
-    </table>
+  const html = `
+    <div style="font-family:Arial; padding:16px; color:#222;">
+      <h2>Gracias por tu compra, ${order.customer?.name} 🙌</h2>
+      <p><strong>Orden:</strong> ${order.orderId}</p>
+      <p><strong>Monto pagado:</strong> $${order.total}</p>
+      <p><strong>Estado Webpay:</strong> ${webpayData.status}</p>
+      <hr />
+      <h3>Detalle de la compra</h3>
+      <table style="width:100%; border-collapse:collapse;">
+        ${itemsHtml}
+      </table>
+      <hr />
+      <p style="font-size:12px; color:#666;">
+        Este correo fue enviado automáticamente por Solucenter.
+      </p>
+    </div>
   `;
+
+  await axios.post(
+    "https://api.resend.com/emails",
+    {
+      from: RESEND_FROM_EMAIL,
+      to,
+      subject: `Compra en Solucenter - Orden ${order.orderId}`,
+      html,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
 }
 
-// Enviar correo a empresa + cliente
-async function enviarCorreosCompra(order, webpayData) {
-  if (!order || !order.customer?.email) {
-    console.error(
-      "⚠️ No se puede enviar correo: falta información del cliente o de la orden"
-    );
-    return;
-  }
-
-  const html = buildOrderHtml(order, webpayData);
-
-  const mailOptions = {
-    from: `"Solucenter" <${EMAIL_USER}>`,
-    to: [COMPANY_EMAIL, order.customer.email], // empresa + cliente
-    subject: `Compra #${order.orderId} - Pago aprobado`,
-    html,
-  };
-
-  console.log("📧 Enviando correos de compra a:", mailOptions.to);
-  await transporter.sendMail(mailOptions);
-  console.log("✅ Correos enviados correctamente");
-}
-
-module.exports = {
-  enviarCorreosCompra,
-};
+module.exports = { enviarCorreosCompra };
