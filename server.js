@@ -230,7 +230,7 @@ app.all("/api/webpay/retorno", async (req, res) => {
     const { buy_order: buyOrderFromWebpay, status } = data;
 
     console.log(
-      "🧠 Claves actuales en pendingEmailOrders al retornar:",
+      "🧠 Claves actuales en pendingEmailOrders:",
       Object.keys(pendingEmailOrders)
     );
     console.log(
@@ -239,27 +239,32 @@ app.all("/api/webpay/retorno", async (req, res) => {
     );
 
     if (status === "AUTHORIZED") {
-      // 💌 Buscar datos guardados para correo usando buy_order (ORD-...)
       const orderForEmail = pendingEmailOrders[buyOrderFromWebpay];
 
       if (orderForEmail) {
-        try {
-          console.log(
-            "📧 Enviando correos de compra..., 📧 Sending purchase emails..."
-          );
-          await enviarCorreosCompra(orderForEmail, data);
-          console.log(
-            "✅ Correos de compra enviados correctamente..., ✅ Purchase emails sent successfully..."
-          );
-        } catch (err) {
-          console.error(
-            "⚠️ Error al enviar correos de compra:",
-            err.message || err
-          );
-        } finally {
-          // 🧹 Borrar del mapa para no acumular memoria
-          delete pendingEmailOrders[buyOrderFromWebpay];
-        }
+        console.log(
+          "📧 Disparando envío de correos en segundo plano..., 📧 Triggering email sending in background..."
+        );
+
+        // 🚀 NO BLOQUEA la respuesta, corre paralelo
+        enviarCorreosCompra(orderForEmail, data)
+          .then(() => {
+            console.log(
+              "✅ Correos enviados correctamente..., ✅ Emails successfully sent..."
+            );
+          })
+          .catch((err) => {
+            console.error(
+              "⚠️ Error al enviar correos..., ⚠️ Error sending emails...",
+              err.message || err
+            );
+          })
+          .finally(() => {
+            delete pendingEmailOrders[buyOrderFromWebpay];
+            console.log(
+              "🧹 Orden eliminada de memoria..., 🧹 Order removed from memory..."
+            );
+          });
       } else {
         console.warn(
           "⚠️ No se encontraron datos en memoria para enviar correos (buy_order):",
@@ -267,113 +272,91 @@ app.all("/api/webpay/retorno", async (req, res) => {
         );
       }
 
+      // 🎉 RESPUESTA INMEDIATA AL USUARIO
       return res.send(`
-  <!DOCTYPE html>
-  <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Pago exitoso</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        background: #f4f7f9;
-        margin: 0;
-        padding: 40px;
-        text-align: center;
-      }
-      .box {
-        background: #ffffff;
-        padding: 30px;
-        max-width: 450px;
-        margin: 40px auto;
-        border-radius: 14px;
-        box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-      }
-      h1 {
-        color: #16a34a;
-        font-size: 28px;
-      }
-      p {
-        color: #374151;
-        font-size: 16px;
-        margin: 6px 0;
-      }
-      .icon {
-        font-size: 52px;
-        margin-bottom: 12px;
-      }
-      .success {
-        color: #16a34a;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="box">
-      <div class="icon success">✔️</div>
-      <h1>Pago autorizado</h1>
-      <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
-      <p><strong>Monto:</strong> $${data.amount}</p>
-      <p><strong>Estado:</strong> ${status}</p>
-      <p>Gracias por tu compra 😊</p>
-      <p>Puedes cerrar esta ventana.</p>
-    </div>
-  </body>
-  </html>
-`);
-    } else {
-      return res.send(`
-  <!DOCTYPE html>
-  <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Pago fallido</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        background: #f8f3f3;
-        margin: 0;
-        padding: 40px;
-        text-align: center;
-      }
-      .box {
-        background: #ffffff;
-        padding: 30px;
-        max-width: 450px;
-        margin: 40px auto;
-        border-radius: 14px;
-        box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-      }
-      h1 {
-        color: #dc2626;
-        font-size: 28px;
-      }
-      p {
-        color: #444;
-        font-size: 16px;
-        margin: 6px 0;
-      }
-      .icon {
-        font-size: 52px;
-        margin-bottom: 12px;
-      }
-      .fail {
-        color: #dc2626;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="box">
-      <div class="icon fail">❌</div>
-      <h1>Pago no autorizado</h1>
-      <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
-      <p><strong>Estado:</strong> ${status}</p>
-      <p>No se pudo completar la transacción.</p>
-      <p>Puedes cerrar esta ventana.</p>
-    </div>
-  </body>
-  </html>
-`);
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+          <meta charset="UTF-8" />
+          <title>Pago exitoso</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              background: #f4f7f9;
+              margin: 0;
+              padding: 40px;
+              text-align: center;
+            }
+            .box {
+              background: #ffffff;
+              padding: 30px;
+              max-width: 450px;
+              margin: 40px auto;
+              border-radius: 14px;
+              box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+            }
+            h1 { color: #16a34a; font-size: 28px; }
+            p { color: #374151; font-size: 16px; margin: 6px 0; }
+            .icon { font-size: 52px; margin-bottom: 12px; }
+            .success { color: #16a34a; }
+          </style>
+        </head>
+        <body>
+          <div class="box">
+            <div class="icon success">✔️</div>
+            <h1>Pago autorizado</h1>
+            <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
+            <p><strong>Monto:</strong> $${data.amount}</p>
+            <p><strong>Estado:</strong> ${status}</p>
+            <p>Gracias por tu compra 😊</p>
+            <p>Puedes cerrar esta ventana.</p>
+          </div>
+        </body>
+        </html>
+      `);
     }
+
+    // ❌ Pago fallido
+    return res.send(`
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Pago fallido</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            background: #f8f3f3;
+            margin: 0;
+            padding: 40px;
+            text-align: center;
+          }
+          .box {
+            background: #ffffff;
+            padding: 30px;
+            max-width: 450px;
+            margin: 40px auto;
+            border-radius: 14px;
+            box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+          }
+          h1 { color: #dc2626; font-size: 28px; }
+          p { color: #444; font-size: 16px; margin: 6px 0; }
+          .icon { font-size: 52px; margin-bottom: 12px; }
+          .fail { color: #dc2626; }
+        </style>
+      </head>
+      <body>
+        <div class="box">
+          <div class="icon fail">❌</div>
+          <h1>Pago no autorizado</h1>
+          <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
+          <p><strong>Estado:</strong> ${status}</p>
+          <p>No se pudo completar la transacción.</p>
+          <p>Puedes cerrar esta ventana.</p>
+        </div>
+      </body>
+      </html>
+    `);
   } catch (error) {
     console.error(
       "❌ Error al confirmar transacción Webpay:",
