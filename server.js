@@ -165,8 +165,9 @@ app.post("/api/cart/checkout", async (req, res) => {
 
     const { token, url } = webpayResponse.data;
     console.log("✅ Transacción Webpay creada:", webpayResponse.data);
-    // 🧾 Guardar datos de la compra asociados al token, solo para enviar correos después
-    pendingEmailOrders[token] = {
+
+    // 🧾 Guardar datos de la compra asociados al buyOrder (ORD-...)
+    pendingEmailOrders[buyOrder] = {
       orderId: buyOrder,
       total: amount,
       items: detailedItems,
@@ -180,8 +181,13 @@ app.post("/api/cart/checkout", async (req, res) => {
         notes: customer.notes || "",
       },
     };
+
     console.log(
       "📧 Datos de compra guardados temporalmente para correo..., 📧 Purchase data temporarily stored for email..."
+    );
+    console.log(
+      "🧠 Claves actuales en pendingEmailOrders:",
+      Object.keys(pendingEmailOrders)
     );
 
     // 👇 Ya no devolvemos newOrder porque no guardamos nada en memoria
@@ -279,6 +285,7 @@ app.all("/api/webpay/retorno", async (req, res) => {
           tokenWs
         );
       }
+
       return res.send(`
   <!DOCTYPE html>
   <html lang="es">
