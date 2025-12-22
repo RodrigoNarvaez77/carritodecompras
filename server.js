@@ -238,6 +238,9 @@ app.all("/api/webpay/retorno", async (req, res) => {
       buyOrderFromWebpay
     );
 
+    const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+    // ✅ Pago autorizado
     if (status === "AUTHORIZED") {
       const orderForEmail = pendingEmailOrders[buyOrderFromWebpay];
 
@@ -272,102 +275,28 @@ app.all("/api/webpay/retorno", async (req, res) => {
         );
       }
 
-      // 🎉 RESPUESTA INMEDIATA AL USUARIO
-      return res.send(`
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-          <meta charset="UTF-8" />
-          <title>Pago exitoso</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              background: #f4f7f9;
-              margin: 0;
-              padding: 40px;
-              text-align: center;
-            }
-            .box {
-              background: #ffffff;
-              padding: 30px;
-              max-width: 450px;
-              margin: 40px auto;
-              border-radius: 14px;
-              box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-            }
-            h1 { color: #16a34a; font-size: 28px; }
-            p { color: #374151; font-size: 16px; margin: 6px 0; }
-            .icon { font-size: 52px; margin-bottom: 12px; }
-            .success { color: #16a34a; }
-          </style>
-        </head>
-        <body>
-          <div class="box">
-            <div class="icon success">✔️</div>
-            <h1>Pago autorizado</h1>
-            <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
-            <p><strong>Monto:</strong> $${data.amount}</p>
-            <p><strong>Estado:</strong> ${status}</p>
-            <p>Gracias por tu compra 😊</p>
-            <p>Puedes cerrar esta ventana.</p>
-          </div>
-        </body>
-        </html>
-      `);
+      // ✅ REDIRECT AL FRONTEND (en vez de res.send HTML)
+      return res.redirect(
+        `${FRONTEND_URL}/pago-exitoso?order=${encodeURIComponent(
+          buyOrderFromWebpay
+        )}&amount=${encodeURIComponent(data.amount)}`
+      );
     }
 
-    // ❌ Pago fallido
-    return res.send(`
-      <!DOCTYPE html>
-      <html lang="es">
-      <head>
-        <meta charset="UTF-8" />
-        <title>Pago fallido</title>
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            background: #f8f3f3;
-            margin: 0;
-            padding: 40px;
-            text-align: center;
-          }
-          .box {
-            background: #ffffff;
-            padding: 30px;
-            max-width: 450px;
-            margin: 40px auto;
-            border-radius: 14px;
-            box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-          }
-          h1 { color: #dc2626; font-size: 28px; }
-          p { color: #444; font-size: 16px; margin: 6px 0; }
-          .icon { font-size: 52px; margin-bottom: 12px; }
-          .fail { color: #dc2626; }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <div class="icon fail">❌</div>
-          <h1>Pago no autorizado</h1>
-          <p><strong>Orden:</strong> ${buyOrderFromWebpay}</p>
-          <p><strong>Estado:</strong> ${status}</p>
-          <p>No se pudo completar la transacción.</p>
-          <p>Puedes cerrar esta ventana.</p>
-        </div>
-      </body>
-      </html>
-    `);
+    // ❌ Pago no autorizado → redirect a página de fallo
+    return res.redirect(
+      `${FRONTEND_URL}/pago-fallido?order=${encodeURIComponent(
+        buyOrderFromWebpay
+      )}&status=${encodeURIComponent(status)}`
+    );
   } catch (error) {
     console.error(
       "❌ Error al confirmar transacción Webpay:",
       error.response?.data || error.message
     );
 
-    return res
-      .status(500)
-      .send(
-        "<h1>❌ Error al confirmar la transacción en Webpay</h1><p>Revisa la consola del backend.</p>"
-      );
+    const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+    return res.redirect(`${FRONTEND_URL}/pago-fallido?status=ERROR`);
   }
 });
 
